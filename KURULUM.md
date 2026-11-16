@@ -15,6 +15,16 @@ Arkadaşlarla günlük görev ve bırakma hedefi takibi.
 
 Grup kodu repoda yazmaz, yalnızca Firebase kurallarında durur. Kodu sadece arkadaşlarınla paylaş.
 
+## Bildirimler
+- Uygulamada **Bildirimleri aç**'a dokun. iPhone'da önce Ana Ekrana Ekle, sonra uygulamayı ana ekrandan aç (iOS 16.4+).
+- Gönderici GitHub Actions'ta (`.github/workflows/notify.yml`) 5 dakikada bir çalışır. GitHub bu zamanlamayı tam tutmaz; bildirimler 5-15 dakika gecikebilir.
+- Gönderilenler: dürtme, kriz anı, destek mesajı, görevine gelen yorum, 21:00 hatırlatması, pazartesi 10:00 haftalık sonuç.
+- Firebase servis anahtarı GitHub'da `FIREBASE_SERVICE_ACCOUNT` gizli değişkeninde durur. Yenilemek için Firebase → Proje ayarları → Hizmet hesapları → yeni anahtar oluştur, `gh secret set FIREBASE_SERVICE_ACCOUNT < dosya.json` ile yükle, dosyayı sil.
+- Çalışma kayıtları: GitHub → repo → Actions → Bildirimler.
+
+## iPhone Sağlık (adım sayısı)
+Uygulamada profil → **iPhone Sağlık → Kur** adımlarını izle. Her kişiye özel gizli bir bağlantı oluşur; Kestirmeler bu bağlantıya adım sayısını yazar, GitHub Actions profile işler.
+
 ## Güncelleme yayınlamak
 Dosyaları değiştirip `git push` yapınca GitHub Pages 1-2 dakikada yeni sürümü yayınlar.
 
