@@ -3,6 +3,7 @@ import {
   S, esc, ICON, avatar, firstName, REACTIONS, COLORS, DAY_SHORT, MILESTONES, SMOKE_TIMELINE, P,
   dailyOf, weeklyOf, goalsOf, commentsOf, findTask, weeklyDone, isSmoking, streakOf, todayProgress, weekPoints,
   prevWeekKey, cleanText, cleanDays, cleanMs, savedMoney, notSmoked, money, timeOf, challengeDay, shiftDay,
+  stepsOf, fmtNum,
 } from "./lib.js";
 
 /* ---------- küçük parçalar ---------- */
@@ -66,12 +67,25 @@ function nudgeBanner() {
     <button class="link" data-act="seenNudges">Tamam</button></div>`;
 }
 
+function pushPrompt() {
+  if (S.pushDismissed || !["default", "ios-install"].includes(S.pushState)) return "";
+  const ios = S.pushState === "ios-install";
+  return `<div class="card prompt">
+    <div class="grow"><b>Bildirimleri aç</b>
+      <p class="muted small">${ios ? "iPhone'da bildirim için önce Safari'de Paylaş → Ana Ekrana Ekle de, uygulamayı ana ekrandan aç."
+        : "Dürtmeler, kriz anları ve akşam hatırlatması telefonuna gelsin."}</p></div>
+    <div class="prompt-actions">${ios ? "" : `<button class="btn small" data-act="enablePush">Aç</button>`}
+      <button class="link" data-act="dismissPush">Sonra</button></div>
+  </div>`;
+}
+
 /* ================= BUGÜN ================= */
 export function viewToday() {
   const u = S.users[S.uid];
   const daily = dailyOf(S.uid);
   const weekly = weeklyOf(S.uid);
   const prog = todayProgress(S.uid);
+  const steps = stepsOf(S.uid);
   const date = new Date().toLocaleDateString("tr-TR", { weekday: "long", day: "numeric", month: "long" });
   return `
     <header class="top">
@@ -79,12 +93,13 @@ export function viewToday() {
       <button class="icon-btn" data-act="openSettings" aria-label="Ayarlar">${avatar(S.uid)}</button>
     </header>
     ${nudgeBanner()}
+    ${pushPrompt()}
     <div class="card summary">
       ${ring(prog.pct, `${prog.done}/${prog.total}`, "tamam")}
       <div class="summary-stats">
         <div><b>${streakOf(S.uid)}</b><span>gün seri</span></div>
         <div><b>${weekPoints(S.uid)}</b><span>puan bu hafta</span></div>
-        <div><b>${u.bestStreak || 0}</b><span>en iyi seri</span></div>
+        ${steps != null ? `<div><b>${fmtNum(steps)}</b><span>adım</span></div>` : `<div><b>${u.bestStreak || 0}</b><span>en iyi seri</span></div>`}
       </div>
     </div>
 
@@ -205,7 +220,7 @@ export function viewTeam() {
           <button class="person-main" data-act="expand" data-id="${uid}">
             ${avatar(uid)}
             <span class="grow"><b>${esc(u.name)}${own ? " <span class='muted'>(sen)</span>" : ""}</b>
-              <span class="item-meta">${p.done}/${p.total} bugün · ${streakOf(uid)} gün seri</span></span>
+              <span class="item-meta">${p.done}/${p.total} bugün · ${streakOf(uid)} gün seri${stepsOf(uid) != null ? ` · ${fmtNum(stepsOf(uid))} adım` : ""}</span></span>
             <span class="pct">${p.pct}%</span>
           </button>
           ${!own && p.pct < 100 ? `<button class="btn small soft" data-act="nudge" data-id="${uid}">Dürt</button>` : ""}
@@ -334,7 +349,47 @@ export function sheetSettings() {
     <div class="swatches">${COLORS.map((c) => `<button type="button" data-color="${c}" class="${c === u.color ? "on" : ""}" style="background:${c}" aria-label="renk"></button>`).join("")}</div>
     <button class="btn full">Kaydet</button>
   </form>
-  <button class="btn full ghost" data-act="logout">Çıkış yap</button>`;
+
+  <h4>Bildirimler</h4>
+  ${pushSettings()}
+
+  <h4>iPhone Sağlık</h4>
+  <div class="setting-row"><div class="grow">Adım sayın her akşam otomatik gelsin.<div class="muted small">${stepsOf(S.uid) != null ? `Bugün: ${fmtNum(stepsOf(S.uid))} adım` : "Henüz bağlı değil"}</div></div>
+    <button class="btn small soft" data-act="openHealth">Kur</button></div>
+
+  <button class="btn full ghost" data-act="logout" style="margin-top:24px">Çıkış yap</button>`;
+}
+
+function pushSettings() {
+  const s = S.pushState;
+  if (s === "granted") return `<div class="setting-row"><div class="grow">Açık<div class="muted small">Dürtme, kriz, destek, yorum ve 21:00 hatırlatması.</div></div>
+    <button class="btn small ghost" data-act="enablePush">Yenile</button></div>`;
+  if (s === "denied") return `<p class="muted small">Bildirimler engellenmiş. Telefonun Ayarlar → Bildirimler → Düzen bölümünden izin ver.</p>`;
+  if (s === "ios-install") return `<p class="muted small">iPhone'da bildirim almak için Safari'de Paylaş → Ana Ekrana Ekle de, sonra uygulamayı ana ekrandaki simgeden aç.</p>`;
+  if (s === "unsupported") return `<p class="muted small">Bu tarayıcı bildirimleri desteklemiyor.</p>`;
+  return `<div class="setting-row"><div class="grow">Kapalı</div><button class="btn small" data-act="enablePush">Aç</button></div>`;
+}
+
+export function sheetHealth() {
+  const key = S.healthKey;
+  if (!key) return `${sheetHead("iPhone Sağlık")}<p class="muted">Hazırlanıyor…</p>`;
+  const url = `https://firestore.googleapis.com/v1/projects/${S.projectId}/databases/(default)/documents/healthInbox/${key}?key=${S.apiKey}`;
+  const body = `{"fields":{"steps":{"doubleValue":DEGER}}}`;
+  return `${sheetHead("iPhone Sağlık")}
+    <p class="muted small">iPhone'daki <b>Kestirmeler</b> uygulamasıyla bir kez kurarsın, sonra her akşam adım sayın kendiliğinden gelir. Bu bağlantı sana özel; kimseyle paylaşma.</p>
+    <ol class="steps">
+      <li><b>Kestirmeler</b> → sağ üst <b>+</b> → yeni kestirme.</li>
+      <li><b>Sağlık Örneklerini Bul</b> eylemini ekle. Tür: <b>Adımlar</b>, Başlangıç Tarihi: <b>Bugün</b>, Gruplama: <b>Gün</b>.</li>
+      <li><b>Sağlık Örneğinin Ayrıntılarını Al</b> ekle, <b>Değer</b>'i seç.</li>
+      <li><b>Metin</b> ekle ve aşağıdaki metni yapıştır. <code>DEGER</code> yazan yeri silip yerine önceki adımdaki <b>Değer</b> değişkenini koy.
+        <div class="copy"><code id="hBody">${esc(body)}</code><button class="btn small ghost" data-act="copy" data-target="hBody">Kopyala</button></div></li>
+      <li><b>URL'nin İçeriğini Al</b> ekle. URL olarak bunu yapıştır:
+        <div class="copy"><code id="hUrl">${esc(url)}</code><button class="btn small ghost" data-act="copy" data-target="hUrl">Kopyala</button></div>
+        Yöntem: <b>PATCH</b>. Başlıklar: <b>Content-Type</b> = <b>application/json</b>. İstek Gövdesi: <b>Dosya</b> → <b>Metin</b>.</li>
+      <li>Kestirmeyi bir kez çalıştır. Birkaç dakika içinde adımların burada görünür.</li>
+      <li><b>Otomasyon</b> sekmesi → <b>+</b> → <b>Günün Saati</b> → 23:30, Her Gün, <b>Hemen Çalıştır</b> → bu kestirmeyi seç. İstersen 21:00 için bir tane daha ekle.</li>
+    </ol>
+    <p class="footnote">Adımlar en geç 5-15 dakika içinde işlenir.</p>`;
 }
 
 export function sheetTask(id) {

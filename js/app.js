@@ -17,6 +17,17 @@ if (!D.configured) {
 
 S.today = dayKey();
 S.week = weekKey();
+S.apiKey = D.API_KEY;
+S.projectId = D.PROJECT_ID;
+try { S.pushDismissed = localStorage.getItem("pushDismissed") === S.today; } catch {}
+
+// Bildirim modülü ayrı yüklenir; desteklenmeyen tarayıcıda uygulamanın geri kalanını bozmasın
+let pushMod = null;
+async function loadPush() {
+  try { pushMod ||= await import("./push.js"); S.pushState = await pushMod.pushState(); }
+  catch (e) { console.warn(e); S.pushState = "unsupported"; }
+  return pushMod;
+}
 
 /* ================= GİRİŞ ================= */
 const TR_MAP = { ç: "c", ğ: "g", ı: "i", ö: "o", ş: "s", ü: "u" };
@@ -99,6 +110,7 @@ async function start() {
     return renderJoin(`Bağlantı hatası (${ex.code || ex.message}). Tekrar dene.`);
   }
   D.listen(onData, (e) => { console.error(e); if (e.code === "permission-denied") renderJoin(); });
+  loadPush().then((m) => { onData(); m?.refreshPush(); });
 }
 
 onAuthStateChanged(D.auth, (user) => {
@@ -127,7 +139,7 @@ function render() {
 
 /* ================= ALT PENCERE ================= */
 let crisisTimer = null;
-const SHEETS = { addTask: V.sheetAddTask, addGoal: V.sheetAddGoal, addChallenge: V.sheetAddChallenge, bet: V.sheetBet, settings: V.sheetSettings, task: V.sheetTask, goal: V.sheetGoal, crisis: V.sheetCrisis };
+const SHEETS = { addTask: V.sheetAddTask, addGoal: V.sheetAddGoal, addChallenge: V.sheetAddChallenge, bet: V.sheetBet, settings: V.sheetSettings, task: V.sheetTask, goal: V.sheetGoal, crisis: V.sheetCrisis, health: V.sheetHealth };
 
 function openSheet(type, id) {
   S.sheet = { type, id };
@@ -298,6 +310,31 @@ document.addEventListener("click", async (e) => {
       case "relapse": if (needsConfirm(b, act + id, "Emin misin? Tekrar dokun")) return; closeSheet(); return D.relapseGoal(id);
       case "deleteGoal": if (needsConfirm(b, act + id, "Kalıcı olarak silinsin mi? Tekrar dokun")) return; closeSheet(); return D.deleteGoal(id);
       case "logout": closeSheet(); return signOut(D.auth);
+      case "enablePush": {
+        const m = await loadPush();
+        if (!m || S.pushState === "unsupported") return toast("Bu tarayıcı bildirimleri desteklemiyor");
+        b.disabled = true;
+        const res = await m.enablePush();
+        S.pushState = res;
+        toast(res === "granted" ? "Bildirimler açık" : "İzin verilmedi");
+        render();
+        if (S.sheet?.type === "settings") $sheetBody.innerHTML = V.sheetSettings();
+        return;
+      }
+      case "dismissPush":
+        S.pushDismissed = true;
+        try { localStorage.setItem("pushDismissed", S.today); } catch {}
+        return render();
+      case "openHealth":
+        openSheet("health");
+        if (!S.healthKey) { S.healthKey = await D.getHealthKey(); if (S.sheet?.type === "health") $sheetBody.innerHTML = V.sheetHealth(); }
+        return;
+      case "copy": {
+        const text = document.getElementById(b.dataset.target)?.textContent || "";
+        try { await navigator.clipboard.writeText(text); toast("Kopyalandı"); }
+        catch { toast("Kopyalanamadı, uzun basıp kopyala"); }
+        return;
+      }
     }
   } catch (ex) {
     console.error(ex);

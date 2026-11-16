@@ -9,7 +9,9 @@ import { firebaseConfig } from "./firebase-config.js";
 import { S, P, shiftDay, weekdayIdx, dailyOf, findTask, cleanDays, toast } from "./lib.js";
 
 export const configured = !!firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith("BURAYA");
-const fb = configured ? initializeApp(firebaseConfig) : null;
+export const fb = configured ? initializeApp(firebaseConfig) : null;
+export const API_KEY = firebaseConfig.apiKey;
+export const PROJECT_ID = firebaseConfig.projectId;
 export const auth = configured ? getAuth(fb) : null;
 // Bellek içi önbellek + long polling: çoklu sekme, gizli mod ve kısıtlı ağlarda sorun çıkarmaz
 const db = configured ? initializeFirestore(fb, { localCache: memoryLocalCache(), experimentalForceLongPolling: true }) : null;
@@ -142,7 +144,7 @@ export async function react(colName, id, emoji) {
 }
 
 /* ---------- yorum, fotoğraf, dürtme ---------- */
-export const addComment = (taskId, text) => addDoc(col("comments"), { taskId, uid: S.uid, text, week: S.week, createdAt: Date.now() });
+export const addComment = (taskId, text) => addDoc(col("comments"), { taskId, uid: S.uid, text, week: S.week, pushed: false, createdAt: Date.now() });
 export const deleteComment = (id) => deleteDoc(ref("comments", id));
 
 export async function savePhoto(taskId, dataUrl) {
@@ -154,7 +156,7 @@ export async function loadPhoto(taskId) {
   return s.exists() ? s.data().data : null;
 }
 
-export const nudge = (to, type = "nudge", text = "") => addDoc(col("nudges"), { from: S.uid, to, type, text, seen: false, createdAt: Date.now() });
+export const nudge = (to, type = "nudge", text = "") => addDoc(col("nudges"), { from: S.uid, to, type, text, seen: false, pushed: false, createdAt: Date.now() });
 export const markNudgesSeen = () => Promise.all(S.nudges.map((n) => updateDoc(ref("nudges", n.id), { seen: true })));
 
 /* ---------- bırakma hedefleri ---------- */
@@ -199,6 +201,20 @@ export async function checkinChallenge(id) {
   toast(`Kaydedildi. +${P.challenge}`);
 }
 export const deleteChallenge = (id) => deleteDoc(ref("challenges", id));
+
+/* ---------- bildirim cihaz anahtarı ---------- */
+export const saveToken = (token) => setDoc(ref("tokens", token), { uid: S.uid, ua: navigator.userAgent.slice(0, 120), updatedAt: Date.now() });
+
+/* ---------- iPhone Sağlık anahtarı ---------- */
+// Kestirmeler bu gizli anahtarla healthInbox/{anahtar} belgesine adım sayısını yazar; GitHub Actions profile işler
+export async function getHealthKey() {
+  const snap = await getDocs(query(col("healthKeys"), where("uid", "==", S.uid)));
+  if (!snap.empty) return snap.docs[0].id;
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  const key = Array.from(bytes, (b) => "abcdefghijkmnopqrstuvwxyz23456789"[b % 33]).join("");
+  await setDoc(ref("healthKeys", key), { uid: S.uid, createdAt: Date.now() });
+  return key;
+}
 
 /* ---------- grup ayarları ---------- */
 export const setBet = (bet) => setDoc(ref("group", "settings"), { bet }, { merge: true });

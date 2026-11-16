@@ -15,7 +15,12 @@ export const S = {
   group: {},       // grup ayarları (iddia vb.)
   expanded: null,  // Ekip sekmesinde açık olan kişi
   sheet: null,     // açık alt pencere {type, id}
+  pushState: null, // bildirim izni durumu
+  pushDismissed: false,
+  healthKey: null,
 };
+export const stepsOf = (uid, date = S.today) => S.users[uid]?.steps?.[date];
+export const fmtNum = (n) => Number(n).toLocaleString("tr-TR");
 
 /* ---------- metin ve tarih ---------- */
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

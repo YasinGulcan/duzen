@@ -76,5 +76,24 @@ service cloud.firestore {
     match /group/{doc} {
       allow read, write: if member();
     }
+
+    // Bildirim cihaz anahtarları: sadece sunucu (GitHub Actions) okur
+    match /tokens/{token} {
+      allow create, update: if member() && creatingMine();
+      allow delete: if member() && mine();
+    }
+
+    // iPhone Sağlık: herkes kendi gizli anahtarını oluşturur ve görür
+    match /healthKeys/{key} {
+      allow read, delete: if member() && mine();
+      allow create: if member() && creatingMine() && key.size() >= 16;
+    }
+    // Kestirmeler giriş yapmadan, sadece geçerli bir anahtarla adım sayısı yazar
+    match /healthInbox/{key} {
+      allow create, update: if exists(/databases/$(database)/documents/healthKeys/$(key))
+        && request.resource.data.keys().hasOnly(['steps'])
+        && request.resource.data.steps is number
+        && request.resource.data.steps >= 0 && request.resource.data.steps < 200000;
+    }
   }
 }
