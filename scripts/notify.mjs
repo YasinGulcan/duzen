@@ -7,7 +7,9 @@ import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 
-initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
+// Baştaki olası BOM karakterini temizle (Windows'tan yüklenen gizli değerlerde olabiliyor)
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT.replace(/^﻿/, "").trim());
+initializeApp({ credential: cert(serviceAccount) });
 const db = getFirestore();
 const fcm = getMessaging();
 
