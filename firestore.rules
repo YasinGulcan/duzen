@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Gruba sadece doğru grup koduyla katılan hesaplar erişebilir.
+    // GRUP_KODU'nu Firebase konsolunda gerçek kodla değiştir; gerçek kodu bu dosyaya/GitHub'a yazma.
+    function member() {
+      return request.auth != null && exists(/databases/$(database)/documents/members/$(request.auth.uid));
+    }
+
+    function mine() { return resource.data.uid == request.auth.uid; }
+    function creatingMine() { return request.resource.data.uid == request.auth.uid; }
+
+    // Başkasının görevine/hedefine sadece kendi tepkini ekleyip kaldırabilirsin
+    function onlyMyReaction() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+        && request.resource.data.reactions.diff(resource.data.reactions).affectedKeys().hasOnly([request.auth.uid]);
+    }
+
+    match /members/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.code == 'GRUP_KODU';
+    }
+
+    match /users/{uid} {
+      allow read: if member();
+      allow write: if member() && request.auth.uid == uid;
+    }
+
+    match /templates/{id} {
+      allow read, update, delete: if member() && mine();
+      allow create: if member() && creatingMine();
+    }
+
+    match /tasks/{id} {
+      allow read: if member();
+      allow create: if member() && creatingMine();
+      allow update: if member() && ((mine() && creatingMine()) || onlyMyReaction());
+      allow delete: if member() && mine();
+    }
+
+    match /goals/{id} {
+      allow read: if member();
+      allow create: if member() && creatingMine();
+      allow update: if member() && ((mine() && creatingMine()) || onlyMyReaction());
+      allow delete: if member() && mine();
+    }
+  }
+}
