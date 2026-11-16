@@ -7,25 +7,25 @@ service cloud.firestore {
     function member() {
       return request.auth != null && exists(/databases/$(database)/documents/members/$(request.auth.uid));
     }
-
-    function mine() { return resource.data.uid == request.auth.uid; }
-    function creatingMine() { return request.resource.data.uid == request.auth.uid; }
+    function me() { return request.auth.uid; }
+    function mine() { return resource.data.uid == me(); }
+    function creatingMine() { return request.resource.data.uid == me(); }
 
     // Başkasının görevine/hedefine sadece kendi tepkini ekleyip kaldırabilirsin
     function onlyMyReaction() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
-        && request.resource.data.reactions.diff(resource.data.reactions).affectedKeys().hasOnly([request.auth.uid]);
+        && request.resource.data.reactions.diff(resource.data.reactions).affectedKeys().hasOnly([me()]);
     }
 
     match /members/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow create: if request.auth != null && request.auth.uid == uid
+      allow read: if request.auth != null && me() == uid;
+      allow create: if request.auth != null && me() == uid
         && request.resource.data.code == 'GRUP_KODU';
     }
 
     match /users/{uid} {
       allow read: if member();
-      allow write: if member() && request.auth.uid == uid;
+      allow write: if member() && me() == uid;
     }
 
     match /templates/{id} {
@@ -45,6 +45,36 @@ service cloud.firestore {
       allow create: if member() && creatingMine();
       allow update: if member() && ((mine() && creatingMine()) || onlyMyReaction());
       allow delete: if member() && mine();
+    }
+
+    match /photos/{taskId} {
+      allow read: if member();
+      allow create, update: if member() && creatingMine() && request.resource.data.data.size() < 900000;
+      allow delete: if member() && mine();
+    }
+
+    match /comments/{id} {
+      allow read: if member();
+      allow create: if member() && creatingMine() && request.resource.data.text.size() <= 200;
+      allow delete: if member() && mine();
+    }
+
+    match /nudges/{id} {
+      allow read: if member() && (resource.data.to == me() || resource.data.from == me());
+      allow create: if member() && request.resource.data.from == me();
+      allow update: if member() && resource.data.to == me()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen']);
+    }
+
+    match /challenges/{id} {
+      allow read: if member();
+      allow create: if member() && request.resource.data.createdBy == me();
+      allow update: if member() && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if member() && resource.data.createdBy == me();
+    }
+
+    match /group/{doc} {
+      allow read, write: if member();
     }
   }
 }

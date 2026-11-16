@@ -1,145 +1,28 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
+  onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {
-  initializeFirestore, memoryLocalCache, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc,
-  collection, query, where, onSnapshot, increment, deleteField, getDocs,
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js";
+import { S, esc, ICON, COLORS, dayKey, weekKey, toast, commentsOf, firstName } from "./lib.js";
+import * as D from "./data.js";
+import * as V from "./views.js";
 
 const $app = document.getElementById("app");
 const $tabs = document.getElementById("tabs");
-const $toast = document.getElementById("toast");
+const $sheet = document.getElementById("sheet");
+const $sheetBody = document.getElementById("sheetBody");
 
-/* ---------- yardımcılar ---------- */
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const pad = (n) => String(n).padStart(2, "0");
-const dayKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const shiftDay = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return dayKey(d); };
-const weekKey = () => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dayKey(d); };
-const money = (n) => "₺" + Math.round(n).toLocaleString("tr-TR");
-
-let toastTimer;
-function toast(msg) {
-  $toast.textContent = msg;
-  $toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ($toast.hidden = true), 2600);
-}
-
-const COLORS = ["#4f6bff", "#e5484d", "#12a594", "#f76b15", "#8e4ec6", "#d6409f", "#0090ff", "#46a758"];
-const REACTIONS = ["🔥", "👏", "💪", "😂"];
-const ICON = {
-  check: '<svg class="ico" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
-  repeat: '<svg class="ico sm" viewBox="0 0 24 24"><path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/></svg>',
-  flame: '<svg class="ico sm" viewBox="0 0 24 24"><path d="M12 22c4 0 7-2.7 7-7 0-4-3-6.5-4-10-2 1.5-3 3.5-3 6-1-1-1.5-2-1.5-3.5C7.5 9.5 5 12 5 15c0 4.3 3 7 7 7Z"/></svg>',
-  close: '<svg class="ico sm" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
-};
-const initial = (u) => esc((u?.name || "?").trim().charAt(0).toLocaleUpperCase("tr-TR"));
-const avatar = (u) => `<div class="avatar" style="background:${esc(u?.color || COLORS[0])}">${initial(u)}</div>`;
-const TASK_POINTS = 10;
-const DAY_BONUS = 20;
-const MILESTONES = [[1, "1 gün"], [3, "3 gün"], [7, "1 hafta"], [14, "2 hafta"], [30, "1 ay"], [90, "3 ay"], [180, "6 ay"], [365, "1 yıl"]];
-
-/* ---------- kurulum kontrolü ---------- */
-if (!firebaseConfig.apiKey || firebaseConfig.apiKey.startsWith("BURAYA")) {
-  $app.innerHTML = `
-    <h1>Düzen</h1>
-    <div class="card">
-      <b>Kurulum gerekiyor</b>
-      <p class="muted">Firebase ayarları henüz girilmemiş. <code>js/firebase-config.js</code> dosyasını
-      KURULUM.md'deki adımlara göre doldur.</p>
-    </div>`;
+if (!D.configured) {
+  $app.innerHTML = `<header class="top"><h1>Düzen</h1></header><div class="card empty"><p>Firebase ayarları girilmemiş: <code>js/firebase-config.js</code></p></div>`;
   throw new Error("firebase-config.js doldurulmamış");
 }
 
-const fb = initializeApp(firebaseConfig);
-const auth = getAuth(fb);
-// Bellek içi önbellek: çoklu sekme / gizli mod / iOS ana ekran uygulamasında IndexedDB sorunlarını önler.
-// Uzun yoklama (long polling) bazı ağların ve içerik engelleyicilerin akış bağlantısını kesmesine karşı.
-const db = initializeFirestore(fb, { localCache: memoryLocalCache(), experimentalForceLongPolling: true });
+S.today = dayKey();
+S.week = weekKey();
 
-/* ---------- durum ---------- */
-const S = {
-  uid: null,
-  email: null,
-  today: dayKey(),
-  tab: "today",
-  users: {},     // uid -> profil
-  tasks: [],     // bugünün tüm görevleri (herkesin)
-  goals: [],     // herkesin bırakma hedefleri
-  confirmRelapse: null,
-  unsubs: [],
-};
-const me = () => S.users[S.uid];
-const tasksOf = (uid) => S.tasks.filter((t) => t.uid === uid).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-const goalsOf = (uid) => S.goals.filter((g) => g.uid === uid);
-function streakOf(u) {
-  if (!u) return 0;
-  return u.lastFullDay === S.today || u.lastFullDay === shiftDay(-1) ? u.streak || 0 : 0;
-}
-
-/* ---------- giriş ---------- */
-// Kullanıcı adı → Firebase'in istediği e-posta biçimi (kullanıcı bunu hiç görmez)
+/* ================= GİRİŞ ================= */
 const TR_MAP = { ç: "c", ğ: "g", ı: "i", ö: "o", ş: "s", ü: "u" };
 const slug = (u) => u.trim().toLocaleLowerCase("tr-TR").replace(/[çğıöşü]/g, (c) => TR_MAP[c]).replace(/[^a-z0-9._-]/g, "");
 const toEmail = (u) => `${slug(u)}@duzen.app`;
-let pending = null; // kayıt sırasında girilen ad ve grup kodu
-
-function renderLogin(err = "", mode = "login") {
-  $tabs.hidden = true;
-  const signup = mode === "signup";
-  $app.innerHTML = `
-    <div class="center" style="padding-bottom:16px"><div class="logo">${ICON.check}</div><h1>Düzen</h1>
-      <div class="muted">Günlük görevler, birlikte.</div></div>
-    <form class="card" id="loginForm">
-      <label>Kullanıcı adı</label><input name="user" autocomplete="username" autocapitalize="none" maxlength="20" required>
-      <label>Şifre</label><input name="pass" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="6" required>
-      ${signup ? `<label>Grup kodu</label><input name="code" autocapitalize="none" required>
-        <div class="tag">Kodu grubu kuran kişiden al. Sadece ilk kayıtta sorulur.</div>` : ""}
-      <button class="full">${signup ? "Hesap oluştur" : "Giriş yap"}</button>
-      <button type="button" class="plain full" id="switch">${signup ? "Zaten hesabım var" : "İlk kez mi? Hesap oluştur"}</button>
-      ${err ? `<div class="err">${esc(err)}</div>` : ""}
-    </form>`;
-  const form = document.getElementById("loginForm");
-  document.getElementById("switch").onclick = () => renderLogin("", signup ? "login" : "signup");
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const user = form.user.value.trim();
-    const pass = form.pass.value;
-    if (!slug(user)) return renderLogin("Kullanıcı adında en az bir harf veya rakam olmalı.", mode);
-    try {
-      if (signup) {
-        pending = { name: user, code: form.code.value.trim() };
-        await createUserWithEmailAndPassword(auth, toEmail(user), pass);
-      } else {
-        await signInWithEmailAndPassword(auth, toEmail(user), pass);
-      }
-    } catch (ex) {
-      pending = null;
-      renderLogin(authError(ex), mode);
-    }
-  });
-}
-
-function renderJoin(err = "") {
-  $tabs.hidden = true;
-  $app.innerHTML = `
-    <h1>Grup kodu</h1><p class="muted">Gruba katılmak için kodu gir.</p>
-    <form class="card" id="joinForm">
-      <input name="code" autocapitalize="none" required>
-      <button class="full">Katıl</button>
-      <button type="button" class="plain full" id="out">Çıkış yap</button>
-      ${err ? `<div class="err">${esc(err)}</div>` : ""}
-    </form>`;
-  document.getElementById("out").onclick = () => signOut(auth);
-  document.getElementById("joinForm").onsubmit = (e) => {
-    e.preventDefault();
-    pending = { ...(pending || {}), code: e.target.code.value.trim() };
-    start();
-  };
-}
+let pending = null;
 
 function authError(ex) {
   const c = ex.code || "";
@@ -148,410 +31,331 @@ function authError(ex) {
   if (c.includes("weak-password")) return "Şifre en az 6 karakter olmalı.";
   if (c.includes("invalid-email")) return "Geçersiz kullanıcı adı.";
   if (c.includes("too-many-requests")) return "Çok fazla deneme, biraz bekle.";
-  return "Hata: " + (ex.message || c);
+  return `Hata (${c || ex.message})`;
 }
 
-/* ---------- profil oluşturma ---------- */
-function renderProfileSetup() {
-  $tabs.hidden = true;
-  let pick = COLORS[0];
-  $app.innerHTML = `
-    <h1>Hoş geldin</h1><p class="muted">Arkadaşların seni böyle görecek.</p>
-    <form class="card" id="pf">
-      <label>Adın</label><input name="name" maxlength="20" value="${esc(pending?.name || "")}" required>
-      <label>Rengin</label>
-      <div class="swatches">${COLORS.map((c, i) => `<button type="button" data-av="${c}" class="${i ? "" : "sel"}" style="background:${c}" aria-label="renk"></button>`).join("")}</div>
-      <button class="full">Başla</button>
-    </form>`;
-  const f = document.getElementById("pf");
-  f.querySelectorAll("[data-av]").forEach((b) => (b.onclick = () => {
-    f.querySelectorAll("[data-av]").forEach((x) => x.classList.remove("sel"));
-    b.classList.add("sel");
-    pick = b.dataset.av;
-  }));
+function bare(html) { $tabs.hidden = true; closeSheet(); $app.innerHTML = `<div class="auth">${html}</div>`; }
+
+function renderLogin(err = "", mode = "login") {
+  const signup = mode === "signup";
+  bare(`
+    <div class="brand"><div class="logo">${ICON.check}</div><h1>Düzen</h1><p class="muted">Günlük görevler, birlikte.</p></div>
+    <form class="card form" id="fLogin">
+      <label>Kullanıcı adı</label><input name="user" autocomplete="username" autocapitalize="none" maxlength="20" required>
+      <label>Şifre</label><input name="pass" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="6" required>
+      ${signup ? `<label>Grup kodu</label><input name="code" autocapitalize="none" autocomplete="off" required>
+        <p class="muted small">Kodu grubu kuran kişiden al. Sadece ilk kayıtta sorulur.</p>` : ""}
+      <button class="btn full">${signup ? "Hesap oluştur" : "Giriş yap"}</button>
+      ${err ? `<p class="err">${esc(err)}</p>` : ""}
+    </form>
+    <button class="link center" id="switch">${signup ? "Zaten hesabım var" : "İlk kez mi? Hesap oluştur"}</button>`);
+  document.getElementById("switch").onclick = () => renderLogin("", signup ? "login" : "signup");
+  const f = document.getElementById("fLogin");
   f.onsubmit = async (e) => {
     e.preventDefault();
-    await setDoc(doc(db, "users", S.uid), {
-      name: f.name.value.trim(), color: pick, points: 0, weekPoints: {},
-      streak: 0, bestStreak: 0, lastFullDay: "", createdAt: Date.now(),
-    });
-    start();
+    const user = f.user.value.trim();
+    if (!slug(user)) return renderLogin("Kullanıcı adında en az bir harf veya rakam olmalı.", mode);
+    f.querySelector("button").disabled = true;
+    try {
+      if (signup) { pending = { name: user, code: f.code.value.trim() }; await createUserWithEmailAndPassword(D.auth, toEmail(user), f.pass.value); }
+      else await signInWithEmailAndPassword(D.auth, toEmail(user), f.pass.value);
+    } catch (ex) { pending = null; renderLogin(authError(ex), mode); }
   };
 }
 
-/* ---------- veri ---------- */
-async function ensureRecurringTasks() {
-  const snap = await getDocs(query(collection(db, "templates"), where("uid", "==", S.uid)));
-  await Promise.all(snap.docs.map(async (t) => {
-    const ref = doc(db, "tasks", `${S.today}_${t.id}`);
-    const ex = await getDoc(ref);
-    if (!ex.exists()) {
-      await setDoc(ref, { uid: S.uid, title: t.data().title, date: S.today, done: false, templateId: t.id, reactions: {}, createdAt: t.data().createdAt || Date.now() });
-    }
-  }));
+function renderJoin(err = "") {
+  bare(`<div class="brand"><h1>Grup kodu</h1><p class="muted">Gruba katılmak için kodu gir.</p></div>
+    <form class="card form" id="fJoin"><input name="code" autocapitalize="none" autocomplete="off" required>
+      <button class="btn full">Katıl</button>${err ? `<p class="err">${esc(err)}</p>` : ""}</form>
+    <button class="link center" id="out">Çıkış yap</button>`);
+  document.getElementById("out").onclick = () => signOut(D.auth);
+  document.getElementById("fJoin").onsubmit = (e) => { e.preventDefault(); pending = { ...(pending || {}), code: e.target.code.value.trim() }; start(); };
 }
 
-function listen() {
-  S.unsubs.forEach((u) => u());
-  const onErr = (e) => {
-    console.error(e);
-    if (e.code === "permission-denied") {
-      $tabs.hidden = true;
-      renderJoin();
-    }
-  };
-  S.unsubs = [
-    onSnapshot(collection(db, "users"), (s) => {
-      S.users = Object.fromEntries(s.docs.map((d) => [d.id, d.data()]));
-      render();
-    }, onErr),
-    onSnapshot(query(collection(db, "tasks"), where("date", "==", S.today)), (s) => {
-      S.tasks = s.docs.map((d) => ({ id: d.id, ...d.data() }));
-      render();
-    }, onErr),
-    onSnapshot(collection(db, "goals"), (s) => {
-      S.goals = s.docs.map((d) => ({ id: d.id, ...d.data() }));
-      render();
-    }, onErr),
-  ];
+function renderProfileSetup() {
+  let color = COLORS[0];
+  bare(`<div class="brand"><h1>Hoş geldin</h1><p class="muted">Arkadaşların seni böyle görecek.</p></div>
+    <form class="card form" id="fProfile">
+      <label>Adın</label><input name="name" maxlength="20" value="${esc(pending?.name || "")}" required>
+      <label>Rengin</label>
+      <div class="swatches">${COLORS.map((c, i) => `<button type="button" data-color="${c}" class="${i ? "" : "on"}" style="background:${c}" aria-label="renk"></button>`).join("")}</div>
+      <button class="btn full">Başla</button></form>`);
+  const f = document.getElementById("fProfile");
+  f.querySelectorAll("[data-color]").forEach((b) => (b.onclick = () => { f.querySelectorAll("[data-color]").forEach((x) => x.classList.remove("on")); b.classList.add("on"); color = b.dataset.color; }));
+  f.onsubmit = async (e) => { e.preventDefault(); await D.createProfile(f.name.value.trim(), color); start(); };
 }
 
-async function addPoints(n) {
-  await updateDoc(doc(db, "users", S.uid), { points: increment(n), [`weekPoints.${weekKey()}`]: increment(n) });
-}
-
-/* ---------- eylemler ---------- */
-async function addTask(title, repeat) {
-  const base = { uid: S.uid, title, date: S.today, done: false, reactions: {}, createdAt: Date.now() };
-  if (repeat) {
-    const tpl = await addDoc(collection(db, "templates"), { uid: S.uid, title, createdAt: base.createdAt });
-    await setDoc(doc(db, "tasks", `${S.today}_${tpl.id}`), { ...base, templateId: tpl.id });
-  } else {
-    await addDoc(collection(db, "tasks"), base);
-  }
-}
-
-async function toggleTask(id) {
-  const t = S.tasks.find((x) => x.id === id);
-  if (!t || t.uid !== S.uid) return;
-  const done = !t.done;
-  t.done = done; // anında hesap için yerel güncelle
-  await updateDoc(doc(db, "tasks", id), { done, doneAt: done ? Date.now() : deleteField() });
-  await addPoints(done ? TASK_POINTS : -TASK_POINTS);
-
-  const mine = tasksOf(S.uid);
-  const u = me();
-  if (done && mine.length && mine.every((x) => x.done) && u.lastFullDay !== S.today) {
-    const streak = u.lastFullDay === shiftDay(-1) ? (u.streak || 0) + 1 : 1;
-    await updateDoc(doc(db, "users", S.uid), {
-      points: increment(DAY_BONUS),
-      [`weekPoints.${weekKey()}`]: increment(DAY_BONUS),
-      streak, bestStreak: Math.max(streak, u.bestStreak || 0), lastFullDay: S.today,
-    });
-    toast(`Günün tamam. +${DAY_BONUS} puan, seri ${streak} gün`);
-  }
-}
-
-async function deleteTask(id) {
-  const t = S.tasks.find((x) => x.id === id);
-  if (!t) return;
-  await deleteDoc(doc(db, "tasks", id));
-  if (t.templateId) await deleteDoc(doc(db, "templates", t.templateId));
-  if (t.done) await addPoints(-TASK_POINTS);
-}
-
-async function react(col, id, emoji) {
-  const item = (col === "tasks" ? S.tasks : S.goals).find((x) => x.id === id);
-  if (!item) return;
-  const cur = item.reactions?.[S.uid];
-  await updateDoc(doc(db, col, id), { [`reactions.${S.uid}`]: cur === emoji ? deleteField() : emoji });
-}
-
-async function addGoal(f) {
-  const now = Date.now();
-  await addDoc(collection(db, "goals"), {
-    uid: S.uid, title: f.title,
-    startedAt: now, lastResetAt: now, bestDays: 0, relapses: 0,
-    perDay: Number(f.perDay) || 0, packPrice: Number(f.packPrice) || 0,
-    checkins: {}, reactions: {}, createdAt: now,
-  });
-}
-
-async function checkinGoal(id) {
-  const g = S.goals.find((x) => x.id === id);
-  if (!g || g.checkins?.[S.today]) return;
-  await updateDoc(doc(db, "goals", id), { [`checkins.${S.today}`]: true });
-  await addPoints(TASK_POINTS);
-  toast("Kaydedildi. +" + TASK_POINTS);
-}
-
-async function relapseGoal(id) {
-  const g = S.goals.find((x) => x.id === id);
-  if (!g) return;
-  const days = cleanDays(g);
-  await updateDoc(doc(db, "goals", id), {
-    lastResetAt: Date.now(), relapses: increment(1), bestDays: Math.max(g.bestDays || 0, days),
-  });
-  toast("Sayaç sıfırlandı. En iyi rekorun duruyor.");
-}
-
-/* ---------- hedef hesapları ---------- */
-const cleanMs = (g) => Date.now() - (g.lastResetAt || g.startedAt);
-const cleanDays = (g) => Math.floor(cleanMs(g) / 86400000);
-function cleanText(g) {
-  const ms = cleanMs(g);
-  const d = Math.floor(ms / 86400000);
-  const h = Math.floor((ms % 86400000) / 3600000);
-  const m = Math.floor((ms % 3600000) / 60000);
-  return d ? `${d} gün ${h} sa` : `${h} sa ${m} dk`;
-}
-
-/* ---------- görünümler ---------- */
-function reactsHtml(col, item, canReact) {
-  const counts = {};
-  Object.values(item.reactions || {}).forEach((e) => (counts[e] = (counts[e] || 0) + 1));
-  const mineE = item.reactions?.[S.uid];
-  if (canReact) {
-    return `<div class="reacts">${REACTIONS.map((e) =>
-      `<button class="react ${mineE === e ? "mine" : ""}" data-act="react" data-col="${col}" data-id="${item.id}" data-e="${e}">${e}${counts[e] ? " " + counts[e] : ""}</button>`).join("")}</div>`;
-  }
-  const list = Object.entries(counts);
-  return list.length ? `<div class="reacts">${list.map(([e, n]) => `<span class="react">${e} ${n}</span>`).join("")}</div>` : "";
-}
-
-function whoReacted(item) {
-  const names = Object.entries(item.reactions || {}).map(([uid, e]) => `${e} ${esc(S.users[uid]?.name || "?")}`);
-  return names.length ? `<div class="tag">${names.join(" · ")}</div>` : "";
-}
-
-function goalCard(g, own) {
-  const days = cleanDays(g);
-  const saved = g.perDay && g.packPrice ? (cleanMs(g) / 86400000) * (g.perDay / 20) * g.packPrice : 0;
-  const notSmoked = g.perDay ? Math.floor((cleanMs(g) / 86400000) * g.perDay) : 0;
-  const checked = !!g.checkins?.[S.today];
-  const confirming = S.confirmRelapse === g.id;
-  return `
-    <div class="card goal">
-      <div class="row spread">
-        <div><div class="tag">${own ? "" : esc(S.users[g.uid]?.name || "") + " · "}${esc(g.title)}</div><div class="counter">${cleanText(g)}</div></div>
-        ${own ? `<button class="plain small" data-act="delGoal" data-id="${g.id}" title="Hedefi sil">${ICON.close}</button>` : ""}
-      </div>
-      ${saved || notSmoked ? `<div class="stats">
-        ${saved ? `<div class="stat"><b>${money(saved)}</b><span>biriken para</span></div>` : ""}
-        ${notSmoked ? `<div class="stat"><b>${notSmoked}</b><span>içilmeyen</span></div>` : ""}
-        <div class="stat"><b>${Math.max(g.bestDays || 0, days)}</b><span>en iyi (gün)</span></div>
-      </div>` : ""}
-      <div class="badges">${MILESTONES.map(([n, l]) => `<span class="badge ${days >= n ? "on" : "off"}">${l}</span>`).join("")}</div>
-      ${own ? `
-        <div class="row" style="margin-top:12px">
-          <button class="grow ${checked ? "ghost" : ""}" data-act="checkin" data-id="${g.id}" ${checked ? "disabled" : ""}>${checked ? "Bugün işaretlendi" : "Bugün de temizim"}</button>
-          <button class="danger" data-act="relapse" data-id="${g.id}">${confirming ? "Emin misin?" : "Kaydım"}</button>
-        </div>${whoReacted(g)}` : reactsHtml("goals", g, true)}
-    </div>`;
-}
-
-function viewToday() {
-  const u = me();
-  const mine = tasksOf(S.uid);
-  const doneN = mine.filter((t) => t.done).length;
-  const pct = mine.length ? Math.round((doneN / mine.length) * 100) : 0;
-  const date = new Date().toLocaleDateString("tr-TR", { weekday: "long", day: "numeric", month: "long" });
-  return `
-    <div class="row spread">
-      <div><div class="muted small">${date}</div><h1>Selam ${esc(u.name)}</h1></div>
-      <button class="plain small" data-act="logout">Çıkış</button>
-    </div>
-    <div class="stats">
-      <div class="stat"><b>${doneN}/${mine.length}</b><span>bugün</span></div>
-      <div class="stat"><b>${streakOf(u)}</b><span>gün seri</span></div>
-      <div class="stat"><b>${u.weekPoints?.[weekKey()] || 0}</b><span>bu hafta</span></div>
-    </div>
-    <div class="progress"><div style="width:${pct}%"></div></div>
-
-    <h2>Görevlerim</h2>
-    <div class="card">
-      ${mine.length ? mine.map((t) => `
-        <div class="task ${t.done ? "done" : ""}">
-          <button class="tick ${t.done ? "on" : ""}" data-act="toggle" data-id="${t.id}" aria-label="tamamla">${t.done ? ICON.check : ""}</button>
-          <div class="grow"><div class="title">${esc(t.title)}</div>
-            ${t.templateId ? `<span class="tag">${ICON.repeat} her gün</span>` : ""}${whoReacted(t)}</div>
-          <button class="plain small" data-act="delTask" data-id="${t.id}" title="${t.templateId ? "Sil (tekrarı da durdurur)" : "Sil"}">${ICON.close}</button>
-        </div>`).join("") : `<div class="muted">Bugün için görev yok.</div>`}
-    </div>
-    <form class="card" id="addTask">
-      <div class="row"><input name="title" placeholder="Yeni görev… (örn. 30 dk kitap)" maxlength="80" required>
-        <button>Ekle</button></div>
-      <label class="check"><input type="checkbox" name="repeat" checked> Her gün tekrarla</label>
-    </form>
-
-    <h2>Bırakma hedeflerim</h2>
-    ${goalsOf(S.uid).map((g) => goalCard(g, true)).join("")}
-    <details class="card">
-      <summary>+ Yeni bırakma hedefi</summary>
-      <form id="addGoal">
-        <label>Neyi bırakıyorsun?</label><input name="title" value="Sigara" maxlength="40" required>
-        <label>Günde kaç tane içiyordun? (isteğe bağlı)</label><input name="perDay" type="number" min="0" inputmode="numeric" placeholder="20">
-        <label>Paket fiyatı ₺ (isteğe bağlı)</label><input name="packPrice" type="number" min="0" inputmode="decimal" placeholder="100">
-        <button class="full">Sayacı başlat</button>
-      </form>
-    </details>`;
-}
-
-function viewFriends() {
-  const ids = Object.keys(S.users).sort((a, b) => (a === S.uid ? -1 : b === S.uid ? 1 : 0));
-  return `<h1>Ekip</h1><p class="muted">Bugün kim ne yaptı</p>` + ids.map((uid) => {
-    const u = S.users[uid];
-    const ts = tasksOf(uid);
-    const doneN = ts.filter((t) => t.done).length;
-    const pct = ts.length ? Math.round((doneN / ts.length) * 100) : 0;
-    const own = uid === S.uid;
-    return `
-      <div class="card">
-        <div class="row">
-          ${avatar(u)}
-          <div class="grow"><b>${esc(u.name)}${own ? " (sen)" : ""}</b>
-            <div class="tag">${ICON.flame} ${streakOf(u)} gün seri · ${u.weekPoints?.[weekKey()] || 0} puan bu hafta</div></div>
-          <b>${pct}%</b>
-        </div>
-        <div class="progress"><div style="width:${pct}%"></div></div>
-        ${ts.map((t) => `
-          <div class="task ${t.done ? "done" : ""}">
-            <span class="tick ${t.done ? "on" : ""}" style="display:grid;place-items:center">${t.done ? ICON.check : ""}</span>
-            <div class="grow"><div class="title">${esc(t.title)}</div>${t.done ? reactsHtml("tasks", t, !own) : ""}</div>
-          </div>`).join("") || `<div class="muted small">Bugün henüz görev eklememiş.</div>`}
-      </div>
-      ${goalsOf(uid).map((g) => goalCard(g, own)).join("")}`;
-  }).join("");
-}
-
-function viewRank() {
-  const wk = weekKey();
-  const list = Object.entries(S.users)
-    .map(([uid, u]) => ({ uid, ...u, wp: u.weekPoints?.[wk] || 0 }))
-    .sort((a, b) => b.wp - a.wp);
-  return `<h1>Sıralama</h1><p class="muted">Bu hafta, pazartesiden beri. Görev ${TASK_POINTS} puan, günü bitirmek +${DAY_BONUS}.</p>
-    ${list.map((u, i) => `
-      <div class="card rank">
-        <div class="pos">${i + 1}</div>
-        ${avatar(u)}
-        <div class="grow"><b>${esc(u.name)}</b><div class="tag">Toplam ${u.points || 0} · en iyi seri ${u.bestStreak || 0} gün</div></div>
-        <b>${u.wp}</b>
-      </div>`).join("")}`;
-}
-
-function render() {
-  if (!S.uid || !me()) return;
-  // Form yazılırken yeniden çizip girdiyi silme
-  const a = document.activeElement;
-  if (a && (a.tagName === "INPUT") && $app.contains(a) && a.value) return;
-  const openDetails = $app.querySelector("details")?.open;
-  $tabs.hidden = false;
-  $tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.tab === S.tab));
-  $app.innerHTML = S.tab === "friends" ? viewFriends() : S.tab === "rank" ? viewRank() : viewToday();
-  const det = $app.querySelector("details");
-  if (det && openDetails) det.open = true;
-}
-
-/* ---------- olaylar ---------- */
-$tabs.addEventListener("click", (e) => {
-  const b = e.target.closest("[data-tab]");
-  if (!b) return;
-  S.tab = b.dataset.tab;
-  S.confirmRelapse = null;
-  window.scrollTo(0, 0);
-  render();
-});
-
-$app.addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-act]");
-  if (!b) return;
-  const { act, id } = b.dataset;
-  try {
-    if (act === "toggle") await toggleTask(id);
-    else if (act === "delTask") await deleteTask(id);
-    else if (act === "react") await react(b.dataset.col, id, b.dataset.e);
-    else if (act === "checkin") await checkinGoal(id);
-    else if (act === "relapse") {
-      if (S.confirmRelapse === id) { S.confirmRelapse = null; await relapseGoal(id); }
-      else { S.confirmRelapse = id; render(); setTimeout(() => { if (S.confirmRelapse === id) { S.confirmRelapse = null; render(); } }, 4000); }
-    } else if (act === "delGoal") {
-      if (b.dataset.sure) await deleteDoc(doc(db, "goals", id));
-      else { b.dataset.sure = "1"; b.textContent = "Sil?"; }
-    } else if (act === "logout") await signOut(auth);
-  } catch (ex) {
-    console.error(ex);
-    toast("Bir hata oldu: " + (ex.code || ex.message));
-  }
-});
-
-$app.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = e.target;
-  try {
-    if (f.id === "addTask") {
-      const title = f.title.value.trim();
-      if (!title) return;
-      const repeat = f.repeat.checked;
-      f.reset(); f.repeat.checked = repeat;
-      document.activeElement?.blur();
-      await addTask(title, repeat);
-    } else if (f.id === "addGoal") {
-      const data = Object.fromEntries(new FormData(f));
-      f.reset();
-      document.activeElement?.blur();
-      await addGoal(data);
-      toast("Sayaç başladı");
-    }
-  } catch (ex) {
-    console.error(ex);
-    toast("Bir hata oldu: " + (ex.code || ex.message));
-  }
-});
-
-// Gün değişince yenile; sayaçlar için dakikada bir yeniden çiz
-setInterval(() => {
-  if (dayKey() !== S.today) location.reload();
-  else if (S.uid) render();
-}, 60000);
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && dayKey() !== S.today) location.reload();
-});
-
-/* ---------- başlat ---------- */
 async function start() {
-  // 1) Grup üyeliği: yoksa grup koduyla katıl
   try {
-    const m = await getDoc(doc(db, "members", S.uid));
-    if (!m.exists()) {
+    if (!(await D.isMember())) {
       if (!pending?.code) return renderJoin();
-      try {
-        await setDoc(doc(db, "members", S.uid), { code: pending.code, joinedAt: Date.now() });
-      } catch (ex) {
-        console.error(ex);
-        return renderJoin(ex.code === "permission-denied" ? "Grup kodu yanlış." : `Bağlantı hatası (${ex.code || ex.message}). Tekrar dene.`);
-      }
+      try { await D.joinGroup(pending.code); }
+      catch (ex) { return renderJoin(ex.code === "permission-denied" ? "Grup kodu yanlış." : `Bağlantı hatası (${ex.code || ex.message}). Tekrar dene.`); }
     }
+    if (!(await D.hasProfile())) return renderProfileSetup();
+    await D.ensureRecurring();
   } catch (ex) {
     console.error(ex);
     return renderJoin(`Bağlantı hatası (${ex.code || ex.message}). Tekrar dene.`);
   }
-  // 2) Profil
-  try {
-    const p = await getDoc(doc(db, "users", S.uid));
-    if (!p.exists()) return renderProfileSetup();
-    await ensureRecurringTasks();
-  } catch (ex) {
-    console.error(ex);
-  }
-  listen();
+  D.listen(onData, (e) => { console.error(e); if (e.code === "permission-denied") renderJoin(); });
 }
 
-onAuthStateChanged(auth, (user) => {
-  S.unsubs.forEach((u) => u());
-  S.unsubs = [];
+onAuthStateChanged(D.auth, (user) => {
+  D.stopListening();
   if (!user) { S.uid = null; return renderLogin(); }
   S.uid = user.uid;
-  S.email = user.email;
-  $app.innerHTML = `<div class="center muted">Yükleniyor…</div>`;
+  $app.innerHTML = `<div class="loading">Yükleniyor…</div>`;
   start();
 });
+
+/* ================= ÇİZİM ================= */
+let raf = 0;
+function onData() {
+  cancelAnimationFrame(raf);
+  raf = requestAnimationFrame(() => { render(); refreshSheet(); });
+}
+
+function render() {
+  if (!S.uid || !S.users[S.uid]) return;
+  $tabs.hidden = false;
+  $tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.tab === S.tab));
+  const y = window.scrollY;
+  $app.innerHTML = S.tab === "goals" ? V.viewGoals() : S.tab === "team" ? V.viewTeam() : S.tab === "week" ? V.viewWeek() : V.viewToday();
+  window.scrollTo(0, y);
+}
+
+/* ================= ALT PENCERE ================= */
+let crisisTimer = null;
+const SHEETS = { addTask: V.sheetAddTask, addGoal: V.sheetAddGoal, addChallenge: V.sheetAddChallenge, bet: V.sheetBet, settings: V.sheetSettings, task: V.sheetTask, goal: V.sheetGoal, crisis: V.sheetCrisis };
+
+function openSheet(type, id) {
+  S.sheet = { type, id };
+  $sheetBody.innerHTML = SHEETS[type](id);
+  $sheet.hidden = false;
+  document.body.classList.add("locked");
+  requestAnimationFrame(() => $sheet.classList.add("show"));
+  if (type === "task") loadTaskPhoto(id);
+  if (type === "crisis") startBreathing();
+  const first = $sheetBody.querySelector("input[name=title], input[name=bet]");
+  if (first) setTimeout(() => first.focus(), 250);
+}
+function closeSheet() {
+  if (!S.sheet) return;
+  S.sheet = null;
+  clearInterval(crisisTimer);
+  $sheet.classList.remove("show");
+  document.body.classList.remove("locked");
+  setTimeout(() => { if (!S.sheet) { $sheet.hidden = true; $sheetBody.innerHTML = ""; } }, 200);
+}
+// Canlı veri gelince açık pencereyi güncelle (yazılan yorumu silmeden)
+function refreshSheet() {
+  if (!S.sheet) return;
+  const { type, id } = S.sheet;
+  if (type === "task") {
+    const input = $sheetBody.querySelector("#fComment input");
+    const typed = input?.value || "";
+    const photo = $sheetBody.querySelector("#photoBox")?.innerHTML;
+    const focused = document.activeElement === input;
+    $sheetBody.innerHTML = V.sheetTask(id);
+    const box = $sheetBody.querySelector("#photoBox");
+    if (box && photo && photo.includes("<img")) box.innerHTML = photo;
+    const ni = $sheetBody.querySelector("#fComment input");
+    if (ni) { ni.value = typed; if (focused) ni.focus(); }
+  } else if (type === "goal") {
+    if (!$sheetBody.contains(document.activeElement) || document.activeElement === document.body) $sheetBody.innerHTML = V.sheetGoal(id);
+  }
+}
+$sheet.addEventListener("click", (e) => { if (e.target === $sheet) closeSheet(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+
+async function loadTaskPhoto(id) {
+  const box = $sheetBody.querySelector("#photoBox");
+  const t = [...S.daily, ...S.weekly].find((x) => x.id === id);
+  if (!box || !t?.hasPhoto) return;
+  try {
+    const src = await D.loadPhoto(id);
+    if (S.sheet?.id === id && src) $sheetBody.querySelector("#photoBox").innerHTML = `<img src="${src}" alt="Kanıt fotoğrafı">`;
+  } catch { box.innerHTML = ""; }
+}
+
+function startBreathing() {
+  let left = 180, phase = 0;
+  const text = () => $sheetBody.querySelector("#breathText");
+  const timer = () => $sheetBody.querySelector("#breathTimer");
+  clearInterval(crisisTimer);
+  crisisTimer = setInterval(() => {
+    left--; phase = (phase + 1) % 10; // 4 sn al, 6 sn ver
+    if (text()) text().textContent = phase < 4 ? "Nefes al" : "Yavaşça ver";
+    if (timer()) timer().textContent = left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Süre doldu";
+    if (left <= 0) clearInterval(crisisTimer);
+  }, 1000);
+}
+
+/* ================= FOTOĞRAF ================= */
+function compressImage(file, max = 900, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+document.addEventListener("change", async (e) => {
+  const input = e.target.closest("input[data-photo]");
+  if (!input?.files?.[0]) return;
+  const id = input.dataset.photo;
+  try {
+    toast("Fotoğraf yükleniyor…");
+    let data = await compressImage(input.files[0]);
+    if (data.length > 700000) data = await compressImage(input.files[0], 700, 0.55);
+    await D.savePhoto(id, data);
+    const box = $sheetBody.querySelector("#photoBox");
+    if (box) box.innerHTML = `<img src="${data}" alt="Kanıt fotoğrafı">`;
+    toast("Fotoğraf eklendi");
+  } catch (ex) { console.error(ex); toast("Fotoğraf eklenemedi"); }
+});
+
+/* ================= OLAYLAR ================= */
+$tabs.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-tab]");
+  if (!b) return;
+  S.tab = b.dataset.tab;
+  window.scrollTo(0, 0);
+  render();
+});
+
+const confirmOnce = new Set(); // iki dokunuşla onay
+function needsConfirm(b, key, label) {
+  if (confirmOnce.has(key)) { confirmOnce.delete(key); return false; }
+  confirmOnce.add(key);
+  const old = b.textContent;
+  b.textContent = label;
+  setTimeout(() => { if (confirmOnce.delete(key) && b.isConnected) b.textContent = old; }, 3500);
+  return true;
+}
+
+document.addEventListener("click", async (e) => {
+  // segment ve çip seçimleri (form içi, çizim gerektirmez)
+  const seg = e.target.closest(".seg button");
+  if (seg) {
+    const wrap = seg.parentElement;
+    wrap.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === seg));
+    const form = seg.closest("form");
+    form.querySelectorAll(".opt").forEach((o) => o.classList.toggle("show", o.dataset.show === seg.dataset.v));
+    return;
+  }
+  const chip = e.target.closest(".chips:not(.static) .chip");
+  if (chip) {
+    const wrap = chip.parentElement;
+    if (wrap.classList.contains("single")) wrap.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c === chip));
+    else chip.classList.toggle("on");
+    return;
+  }
+  const sw = e.target.closest(".swatches button");
+  if (sw && $sheet.contains(sw)) { sw.parentElement.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === sw)); return; }
+
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  const { act, id } = b.dataset;
+  try {
+    switch (act) {
+      case "openAddTask": return openSheet("addTask");
+      case "openAddGoal": return openSheet("addGoal");
+      case "openAddChallenge": return openSheet("addChallenge");
+      case "openBet": return openSheet("bet");
+      case "openSettings": return openSheet("settings");
+      case "openTask": return openSheet("task", id);
+      case "openGoal": return openSheet("goal", id);
+      case "closeSheet": return closeSheet();
+      case "openCrisis": {
+        openSheet("crisis", id);
+        const g = S.goals.find((x) => x.id === id);
+        D.crisisAlert(g?.title || "Kriz anı").catch(console.error);
+        return;
+      }
+      case "crisisDone": closeSheet(); if (id) await D.crisisSurvived(id); toast("Tebrikler, bir krizi daha atlattın"); return;
+      case "toggle": return D.toggleTask(id);
+      case "react": return D.react(b.dataset.col, id, b.dataset.e);
+      case "expand": S.expanded = S.expanded === id ? null : id; return render();
+      case "nudge": b.disabled = true; await D.nudge(id); return toast(`${firstName(id)} dürtüldü`);
+      case "cheer": b.disabled = true; await D.nudge(id, "cheer", "Devam, yapıyorsun!"); return toast("Destek mesajı gönderildi");
+      case "seenNudges": return D.markNudgesSeen();
+      case "checkin": return D.checkinGoal(id);
+      case "joinChallenge": return D.joinChallenge(id);
+      case "checkinChallenge": return D.checkinChallenge(id);
+      case "deleteChallenge": if (needsConfirm(b, act + id, "Sil?")) return; return D.deleteChallenge(id);
+      case "deleteComment": return D.deleteComment(id);
+      case "deleteTask": if (needsConfirm(b, act + id, "Emin misin? Tekrar dokun")) return; closeSheet(); return D.deleteTask(id, false);
+      case "stopTask": if (needsConfirm(b, act + id, "Emin misin? Tekrar dokun")) return; closeSheet(); return D.deleteTask(id, true);
+      case "relapse": if (needsConfirm(b, act + id, "Emin misin? Tekrar dokun")) return; closeSheet(); return D.relapseGoal(id);
+      case "deleteGoal": if (needsConfirm(b, act + id, "Kalıcı olarak silinsin mi? Tekrar dokun")) return; closeSheet(); return D.deleteGoal(id);
+      case "logout": closeSheet(); return signOut(D.auth);
+    }
+  } catch (ex) {
+    console.error(ex);
+    toast(`Bir hata oldu (${ex.code || ex.message})`);
+  }
+});
+
+document.addEventListener("submit", async (e) => {
+  const f = e.target;
+  e.preventDefault();
+  try {
+    if (f.id === "fAddTask") {
+      const title = f.title.value.trim();
+      const v = f.querySelector(".seg .on")?.dataset.v || "daily";
+      if (!title) return;
+      const days = [...f.querySelectorAll("[data-day].on")].map((c) => Number(c.dataset.day));
+      if (v === "days" && !days.length) return toast("En az bir gün seç");
+      const target = Number(f.querySelector("[data-target].on")?.dataset.target || 3);
+      closeSheet();
+      await D.addTask({ title, kind: v === "days" ? "daily" : v, days: v === "days" ? days : [], target });
+    } else if (f.id === "fAddGoal") {
+      const kind = f.querySelector(".seg .on")?.dataset.v || "smoking";
+      const title = kind === "smoking" ? "Sigara" : f.title.value.trim();
+      if (!title) return toast("Neyi bıraktığını yaz");
+      closeSheet();
+      await D.addGoal({ title, kind, perDay: kind === "smoking" ? f.perDay.value : 0, packPrice: kind === "smoking" ? f.packPrice.value : 0 });
+      toast("Sayaç başladı");
+    } else if (f.id === "fAddChallenge") {
+      const title = f.title.value.trim();
+      if (!title) return;
+      const days = Number(f.querySelector("[data-len].on")?.dataset.len || 7);
+      closeSheet();
+      await D.addChallenge({ title, days });
+    } else if (f.id === "fBet") {
+      closeSheet();
+      await D.setBet(f.bet.value.trim());
+    } else if (f.id === "fSettings") {
+      const color = f.querySelector("[data-color].on")?.dataset.color || S.users[S.uid].color;
+      closeSheet();
+      await D.updateProfile({ name: f.name.value.trim(), color });
+    } else if (f.id === "fSave") {
+      await D.setSaveFor(f.dataset.goal, f.name.value.trim(), f.amount.value);
+      toast("Kaydedildi");
+    } else if (f.id === "fComment") {
+      const text = f.text.value.trim();
+      if (!text) return;
+      f.text.value = "";
+      await D.addComment(f.dataset.task, text);
+    }
+  } catch (ex) {
+    console.error(ex);
+    toast(`Bir hata oldu (${ex.code || ex.message})`);
+  }
+});
+
+// Gün/hafta değişince yenile; sayaçlar için dakikada bir çiz
+setInterval(() => {
+  if (dayKey() !== S.today) location.reload();
+  else if (S.uid && !S.sheet) render();
+}, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && dayKey() !== S.today) location.reload(); });
