@@ -1,48 +1,28 @@
-# Düzen – Kurulum (yaklaşık 10 dakika, tamamen ücretsiz)
+# Düzen
 
-Uygulama iki ücretsiz servisle çalışır:
-- **Firebase**: veritabanı ve giriş (Google'ın ücretsiz Spark planı, kredi kartı istemez)
-- **GitHub Pages**: sitenin yayınlandığı yer
+Arkadaşlarla günlük görev ve bırakma hedefi takibi.
 
-Bilgisayarın kapalı olsa bile çalışır.
+- **Adres:** https://yasingulcan.github.io/duzen/
+- **Veritabanı ve giriş:** Firebase projesi `duzen-3c0cd` (ücretsiz Spark planı)
+- **Yayın:** GitHub Pages, repo `YasinGulcan/duzen`
 
----
+## Kullanmaya başlamak
+1. Adresi aç → **İlk kez mi? Hesap oluştur**.
+2. Kullanıcı adı, şifre (en az 6 karakter) ve **grup kodunu** gir. Grup kodu yalnızca ilk kayıtta sorulur.
+3. Telefona kur:
+   - **iPhone:** Safari → Paylaş → **Ana Ekrana Ekle**
+   - **Android:** Chrome → ⋮ → **Ana ekrana ekle**
 
-## 1) Firebase projesi
-1. https://console.firebase.google.com → **Proje ekle** → isim: `duzen` → Google Analytics'i kapatabilirsin → Oluştur.
-2. Proje ana sayfasında **`</>` (Web)** simgesine tıkla → takma ad `duzen` → **Uygulamayı kaydet**.
-3. Gösterilen `firebaseConfig = { ... }` içindeki değerleri kopyala ve **`js/firebase-config.js`** dosyasındaki yer tutucuların yerine yapıştır.
+Grup kodu repoda yazmaz, yalnızca Firebase kurallarında durur. Kodu sadece arkadaşlarınla paylaş.
 
-## 2) Giriş yöntemini aç
-- Sol menü **Build → Authentication → Get started → Sign-in method → Email/Password → Enable → Save**.
+## Güncelleme yayınlamak
+Dosyaları değiştirip `git push` yapınca GitHub Pages 1-2 dakikada yeni sürümü yayınlar.
 
-## 3) Veritabanını oluştur
-1. **Build → Firestore Database → Create database**.
-2. Konum: **europe-west** (ör. `europe-west3 Frankfurt`) → **Production mode** ile başlat.
-3. **Rules** sekmesine geç. **`firestore.rules`** dosyasının tamamını oraya yapıştır.
-4. En üstteki 3 e-postayı **sen ve 2 arkadaşının e-postalarıyla** değiştir (küçük harfle) → **Publish**.
+## Grup kodunu değiştirmek
+Firebase konsolu → Firestore → **Rules** → `request.resource.data.code == '...'` satırındaki kodu değiştir → **Publish**. Daha önce katılmış hesaplar etkilenmez.
 
-## 4) GitHub Pages'te yayınla
-1. https://github.com → hesabın yoksa aç → sağ üst **+ → New repository** → isim: `duzen` → **Public** → Create.
-2. **"uploading an existing file"** bağlantısına tıkla → bu klasördeki **tüm dosya ve klasörleri** (index.html, style.css, js/, icons/, manifest.json, sw.js…) sürükle bırak → **Commit changes**.
-3. Repo'da **Settings → Pages** → Source: **Deploy from a branch** → Branch: **main** / **(root)** → Save.
-4. 1-2 dakika sonra adres çıkar: `https://KULLANICI_ADIN.github.io/duzen/`
-5. Firebase'de **Authentication → Settings → Authorized domains → Add domain** → `KULLANICI_ADIN.github.io` ekle.
-
-## 5) Kullanmaya başla
-- Linki arkadaşlarına gönder. Herkes ilk girişte **"Hesap oluştur"** ile kural listesindeki e-postasıyla kaydolur.
-- **iPhone:** Safari'de aç → Paylaş → **Ana Ekrana Ekle**.
-- **Android:** Chrome'da aç → ⋮ → **Ana ekrana ekle / Uygulamayı yükle**.
-
----
-
-## Güncelleme yaparken
-Değişen dosyaları GitHub'a tekrar yükle (aynı isimle üzerine yazar). Telefonda uygulamayı kapatıp açınca yenisi gelir.
+## Şifre unutulursa
+E-posta olmadığı için kendi kendine sıfırlama yok. Firebase konsolu → Authentication → Users → o kullanıcı → **Delete account**. Kişi aynı kullanıcı adıyla yeniden kayıt olur. Eski görev geçmişi Firestore'da kalır ama yeni hesaba bağlanmaz.
 
 ## Ücretsiz limitler
-Firestore günde 50.000 okuma / 20.000 yazma veriyor. 3 kişi için bu limitin çok çok altında kalırsınız.
-
-## Sorun giderme
-- **"Kurulum gerekiyor" yazıyor** → `js/firebase-config.js` doldurulmamış.
-- **"Erişim yok" yazıyor** → o e-posta `firestore.rules` listesinde yok ya da yazım farklı. Ekleyip tekrar Publish et.
-- **Giriş "auth/unauthorized-domain" hatası** → 4.5. adımı yap.
+Firestore günde 50.000 okuma ve 20.000 yazma veriyor. Üç kişi bu limitin çok altında kalır.
