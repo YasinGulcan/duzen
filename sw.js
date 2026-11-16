@@ -1,5 +1,5 @@
 // Basit service worker: uygulama kabuğunu önbellekler, önce ağdan dener.
-const CACHE = "duzen-v1";
+const CACHE = "duzen-v2";
 const SHELL = ["./", "index.html", "style.css", "js/app.js", "js/firebase-config.js", "manifest.json", "icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {

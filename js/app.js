@@ -3,7 +3,7 @@ import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  initializeFirestore, persistentLocalCache, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc,
+  initializeFirestore, memoryLocalCache, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc,
   collection, query, where, onSnapshot, increment, deleteField, getDocs,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
@@ -56,7 +56,9 @@ if (!firebaseConfig.apiKey || firebaseConfig.apiKey.startsWith("BURAYA")) {
 
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
-const db = initializeFirestore(fb, { localCache: persistentLocalCache() });
+// Bellek içi önbellek: çoklu sekme / gizli mod / iOS ana ekran uygulamasında IndexedDB sorunlarını önler.
+// Uzun yoklama (long polling) bazı ağların ve içerik engelleyicilerin akış bağlantısını kesmesine karşı.
+const db = initializeFirestore(fb, { localCache: memoryLocalCache(), experimentalForceLongPolling: true });
 
 /* ---------- durum ---------- */
 const S = {
@@ -524,13 +526,14 @@ async function start() {
       if (!pending?.code) return renderJoin();
       try {
         await setDoc(doc(db, "members", S.uid), { code: pending.code, joinedAt: Date.now() });
-      } catch {
-        return renderJoin("Grup kodu yanlış.");
+      } catch (ex) {
+        console.error(ex);
+        return renderJoin(ex.code === "permission-denied" ? "Grup kodu yanlış." : `Bağlantı hatası (${ex.code || ex.message}). Tekrar dene.`);
       }
     }
   } catch (ex) {
     console.error(ex);
-    return renderJoin("Bağlantı hatası, tekrar dene.");
+    return renderJoin(`Bağlantı hatası (${ex.code || ex.message}). Tekrar dene.`);
   }
   // 2) Profil
   try {
